@@ -4,6 +4,12 @@ variable "resource_group_name" {
   default     = "bechong"
 }
 
+variable "use_existing_resource_group" {
+  description = "Set to true to use an existing Resource Group; set to false to create a new one."
+  type        = bool
+  default     = false
+}
+
 variable "location" {
   description = "The Azure region where all resources will be created."
   type        = string

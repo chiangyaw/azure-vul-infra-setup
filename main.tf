@@ -12,21 +12,38 @@ provider "azurerm" {
   features {}
 }
 
-# 1. Resource Group
-resource "azurerm_resource_group" "main" {
+# 1. Resource Group Conditional Logic
+
+# Data source for an existing Resource Group (used if var.use_existing_resource_group is true)
+data "azurerm_resource_group" "existing" {
+  count = var.use_existing_resource_group ? 1 : 0
+  name  = var.resource_group_name
+}
+
+# Resource to create a new Resource Group (used if var.use_existing_resource_group is false)
+resource "azurerm_resource_group" "new" {
+  count    = var.use_existing_resource_group ? 0 : 1
   name     = var.resource_group_name
   location = var.location
 }
 
+# Local variable to reference the correct Resource Group object throughout the rest of the configuration
+locals {
+  # If 'use_existing_resource_group' is true, reference the data source.
+  # If false, reference the created resource.
+  rg = var.use_existing_resource_group ? data.azurerm_resource_group.existing[0] : azurerm_resource_group.new[0]
+}
+
+# All subsequent resources now reference locals.rg.name and locals.rg.location
+
 # 2. Azure Container Registry (ACR) - Publicly Accessible
 resource "azurerm_container_registry" "acr" {
   name                = var.acr_name 
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = local.rg.location
+  resource_group_name = local.rg.name
   sku                 = "Basic"
   admin_enabled       = true 
 
-  # Set public network access
   public_network_access_enabled = true
 }
 
@@ -34,8 +51,8 @@ resource "azurerm_container_registry" "acr" {
 resource "azurerm_kubernetes_cluster" "aks" {
   count               = var.aks_count
   name                = "aks-cluster-${count.index}"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = local.rg.location
+  resource_group_name = local.rg.name
   dns_prefix          = "aks-cluster-dns-${count.index}"
 
   default_node_pool {
@@ -52,16 +69,16 @@ resource "azurerm_kubernetes_cluster" "aks" {
 # 4. Multiple Publicly Accessible Blob Storages (Controlled by var.aks_count)
 resource "azurerm_storage_account" "blob_storage" {
   count                    = var.aks_count
-  name                     = "st${replace(var.resource_group_name, "-", "")}blob${count.index}"
-  resource_group_name      = azurerm_resource_group.main.name
-  location                 = azurerm_resource_group.main.location
+  # Note: Storage account names must be globally unique, so we'll still construct a unique name based on the RG name.
+  name                     = "st${replace(local.rg.name, "-", "")}blob${count.index}" 
+  resource_group_name      = local.rg.name
+  location                 = local.rg.location
   account_tier             = "Standard"
   account_replication_type = "LRS"
   
   network_rules {
     default_action = "Allow"
     bypass         = ["AzureServices"]
-    # To be explicitly public, we don't need any ip_rules or virtual_network_subnet_ids
   }
 }
 
@@ -69,32 +86,33 @@ resource "azurerm_storage_container" "container" {
   count                 = var.aks_count
   name                  = "public-data-${count.index}"
   storage_account_name  = azurerm_storage_account.blob_storage[count.index].name
-  container_access_type = "blob" # Allows public read access to blobs
+  container_access_type = "blob" 
 }
 
-# ⭐️ NEW RESOURCE: Upload the sample file to each storage container
+# Upload the sample file to each storage container
 resource "azurerm_storage_blob" "sample_file_blob" {
   count                  = var.aks_count
   name                   = "1-MB-Test-SensitiveData.xlsx"
   storage_account_name   = azurerm_storage_account.blob_storage[count.index].name
   storage_container_name = azurerm_storage_container.container[count.index].name
   type                   = "Block"
-  source                 = "1-MB-Test-SensitiveData.xlsx" # Local file path
+  source                 = "1-MB-Test-SensitiveData.xlsx" 
 }
 
 # 5. Ubuntu VM with Jenkins (Publicly Accessible)
 # Network and IP
+# NOTE: VNET/Subnet/NIC/VM must be created in the local.rg.name/location
 resource "azurerm_public_ip" "jenkins_ip" {
   name                = "jenkins-vm-public-ip"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = local.rg.location
+  resource_group_name = local.rg.name
   allocation_method   = "Static"
 }
 
 resource "azurerm_network_security_group" "jenkins_nsg" {
   name                = "jenkins-vm-nsg"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = local.rg.location
+  resource_group_name = local.rg.name
 
   security_rule {
     name                       = "SSH"
@@ -104,7 +122,7 @@ resource "azurerm_network_security_group" "jenkins_nsg" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "22"
-    source_address_prefix      = "*" # Publicly accessible
+    source_address_prefix      = "*" 
     destination_address_prefix = "*"
   }
   security_rule {
@@ -114,30 +132,30 @@ resource "azurerm_network_security_group" "jenkins_nsg" {
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_range     = "8080" # Default Jenkins port
-    source_address_prefix      = "*" # Publicly accessible
+    destination_port_range     = "8080" 
+    source_address_prefix      = "*" 
     destination_address_prefix = "*"
   }
 }
 
 resource "azurerm_virtual_network" "vnet" {
   name                = "vnet-jenkins"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = local.rg.location
+  resource_group_name = local.rg.name
   address_space       = ["10.0.0.0/16"]
 }
 
 resource "azurerm_subnet" "subnet" {
   name                 = "subnet-jenkins"
-  resource_group_name  = azurerm_resource_group.main.name
+  resource_group_name  = local.rg.name
   virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = ["10.0.1.0/24"]
 }
 
 resource "azurerm_network_interface" "jenkins_nic" {
   name                = "jenkins-vm-nic"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = local.rg.location
+  resource_group_name = local.rg.name
 
   ip_configuration {
     name                          = "internal"
@@ -211,8 +229,8 @@ data "cloudinit_config" "jenkins_init" {
 # The Ubuntu VM
 resource "azurerm_linux_virtual_machine" "jenkins_vm" {
   name                  = "jenkins-ubuntu-vm"
-  location              = azurerm_resource_group.main.location
-  resource_group_name   = azurerm_resource_group.main.name
+  location              = local.rg.location
+  resource_group_name   = local.rg.name
   size                  = var.vm_size
   admin_username        = var.vm_admin_username
   admin_password        = var.vm_admin_password
@@ -229,11 +247,11 @@ resource "azurerm_linux_virtual_machine" "jenkins_vm" {
 
   source_image_reference {
     publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-focal" # Ubuntu Server 20.04 LTS
+    offer     = "0001-com-ubuntu-server-focal" 
     sku       = "20_04-lts"
     version   = "latest"
   }
   
-  # Automatically install Jenkins via cloud-init
+  # Automatically install Jenkins and Docker via cloud-init
   custom_data = data.cloudinit_config.jenkins_init.rendered
 }
