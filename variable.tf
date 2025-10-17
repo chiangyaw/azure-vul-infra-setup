@@ -7,7 +7,7 @@ variable "resource_group_name" {
 variable "use_existing_resource_group" {
   description = "Set to true to use an existing Resource Group; set to false to create a new one."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "location" {
