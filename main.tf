@@ -43,6 +43,7 @@ resource "azurerm_container_registry" "acr" {
   resource_group_name = local.rg.name
   sku                 = "Basic"
   admin_enabled       = true 
+  public_network_access_enabled = false
 }
 
 # 3. Multiple AKS Clusters (Controlled by var.aks_count)
