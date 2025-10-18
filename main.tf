@@ -41,9 +41,9 @@ resource "azurerm_container_registry" "acr" {
   name                = var.acr_name 
   location            = local.rg.location
   resource_group_name = local.rg.name
-  sku                 = "Basic"
+  sku                 = "Premium"
   admin_enabled       = true 
-  public_network_access_enabled = false
+  public_network_access_enabled = true
 }
 
 # 3. Multiple AKS Clusters (Controlled by var.aks_count)
@@ -75,7 +75,7 @@ resource "azurerm_storage_account" "blob_storage" {
   account_tier             = "Standard"
   account_replication_type = "LRS"
   network_rules {
-    default_action = "Deny" # Policy often requires this to be "Deny"
+    default_action = "Allow"
     bypass         = ["AzureServices"]
     ip_rules       = ["0.0.0.0/0"]
   }
